@@ -879,6 +879,8 @@ enum selinux_enforcing_status { SELINUX_DISABLED, SELINUX_PERMISSIVE, SELINUX_EN
 static selinux_enforcing_status selinux_status_from_cmdline() {
     selinux_enforcing_status status = SELINUX_ENFORCING;
 
+    NOTICE("Init: selinux_status_from_cmdline\n");
+
     std::function<void(char*,bool)> fn = [&](char* name, bool in_qemu) {
         char *value = strchr(name, '=');
         if (value == nullptr) { return; }
@@ -921,6 +923,7 @@ static bool selinux_is_enforcing(void)
 
 int selinux_reload_policy(void)
 {
+    NOTICE("Init: selinux_reload_policy\n");
     if (selinux_is_disabled()) {
         return -1;
     }
@@ -954,6 +957,7 @@ static void security_failure() {
 
 static void selinux_initialize(bool in_kernel_domain) {
     Timer t;
+    NOTICE("Init: selinux_initialize start\n");
 
     selinux_callback cb;
     cb.func_log = selinux_klog_callback;
@@ -962,19 +966,23 @@ static void selinux_initialize(bool in_kernel_domain) {
     selinux_set_callback(SELINUX_CB_AUDIT, cb);
 
     if (selinux_is_disabled()) {
+        NOTICE("Init: SELinux disabled !!! - return\n");
         return;
     }
 
     if (in_kernel_domain) {
-        INFO("Loading SELinux policy...\n");
+        //INFO("Loading SELinux policy...\n");
+        NOTICE("Init: Loading SELinux policy...\n");
         if (selinux_android_load_policy() < 0) {
             ERROR("failed to load policy: %s\n", strerror(errno));
             security_failure();
         }
 
         bool is_enforcing = selinux_is_enforcing();
+        NOTICE("Init: is_enforcing = %d \n", is_enforcing);
         security_setenforce(is_enforcing);
 
+        NOTICE("Init: write_file\n");
         if (write_file("/sys/fs/selinux/checkreqprot", "0") == -1) {
             security_failure();
         }
@@ -982,8 +990,11 @@ static void selinux_initialize(bool in_kernel_domain) {
         NOTICE("(Initializing SELinux %s took %.2fs.)\n",
                is_enforcing ? "enforcing" : "non-enforcing", t.duration());
     } else {
+        NOTICE("Init: selinux_init_all_handles...\n");
         selinux_init_all_handles();
     }
+
+    NOTICE("Init: selinux_initialize END\n");
 }
 
 int main(int argc, char** argv) {
@@ -1027,6 +1038,8 @@ int main(int argc, char** argv) {
     klog_init();
     klog_set_level(KLOG_NOTICE_LEVEL);
 
+    NOTICE("Init: main start (SELinux init disabled)\n");
+
     NOTICE("init%s started!\n", is_first_stage ? "" : " second stage");
 
     if (!is_first_stage) {
@@ -1044,17 +1057,25 @@ int main(int argc, char** argv) {
         // used by init as well as the current required properties.
         export_kernel_boot_props();
     }
-
-    // Set up SELinux, including loading the SELinux policy if we're in the kernel domain.
-    selinux_initialize(is_first_stage);
-
+    // -----------------------------------------------------------------
+    // If SELinux is enabled in systemd, don't run selinux init in here.
+    // -----------------------------------------------------------------
+    if(0) {
+        NOTICE("Init: Run selinux_initialize \n");
+        // Set up SELinux, including loading the SELinux policy if we're in the kernel domain.
+        selinux_initialize(is_first_stage);
+    }
     // If we're in the kernel domain, re-exec init to transition to the init domain now
     // that the SELinux policy has been loaded.
     if (is_first_stage) {
-        if (restorecon("/init") == -1) {
-            ERROR("restorecon failed: %s\n", strerror(errno));
-            security_failure();
-        }
+        // -------------------------------------------------------
+        // If SELinux is enabled in systemd, don't run restorecon.
+        // --------------------------------------------------------
+        // if (restorecon("/init") == -1) {
+        //    ERROR("restorecon failed: %s\n", strerror(errno));
+        //    security_failure();
+        // }
+        NOTICE("Init: Re-exec init now\n");
         char* path = argv[0];
         char* args[] = { path, const_cast<char*>("--second-stage"), nullptr };
         if (execv(path, args) == -1) {
@@ -1066,11 +1087,17 @@ int main(int argc, char** argv) {
     // These directories were necessarily created before initial policy load
     // and therefore need their security context restored to the proper value.
     // This must happen before /dev is populated by ueventd.
-    INFO("Running restorecon...\n");
-    restorecon("/dev");
-    restorecon("/dev/socket");
-    restorecon("/dev/__properties__");
-    restorecon_recursive("/sys");
+
+    // -------------------------------------------------------
+    // If SELinux is enabled in systemd, don't run restorecon.
+    // -------------------------------------------------------
+    // NOTICE("Running restorecon...\n");
+    // restorecon("/dev");
+    // restorecon("/dev/socket");
+    // restorecon("/dev/__properties__");
+    // restorecon_recursive("/sys");
+
+    NOTICE("Init: Continue init\n");
 
     epoll_fd = epoll_create1(EPOLL_CLOEXEC);
     if (epoll_fd == -1) {
@@ -1147,6 +1174,8 @@ int main(int argc, char** argv) {
             ((void (*)()) ev.data.ptr)();
         }
     }
+
+    NOTICE("Init: init done - exit\n");
 
     return 0;
 }
